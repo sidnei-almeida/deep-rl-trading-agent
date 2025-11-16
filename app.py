@@ -5,7 +5,6 @@ from typing import List
 import pandas as pd
 import numpy as np
 import onnxruntime as ort
-import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -70,33 +69,18 @@ def softmax(x: np.ndarray) -> np.ndarray:
 
 def fetch_price_data() -> tuple[pd.DataFrame, str]:
     """
-    Tenta baixar dados de preço via yfinance de 2015 até hoje.
-    Se falhar / vier vazio, tenta Alpha Vantage (TIME_SERIES_DAILY_ADJUSTED).
-    Se ainda assim falhar, gera uma série sintética como último recurso.
+    Baixa dados de preço via Alpha Vantage (TIME_SERIES_DAILY_ADJUSTED)
+    de 2015 até hoje.
+
+    Se Alpha Vantage falhar / vier vazio, usa um CSV local em
+    data_fallback/sp500.csv. Se ainda assim falhar, gera uma série sintética
+    como último recurso.
 
     Retorna:
         (dataframe_de_precos, data_source)
-        data_source in {"yfinance", "alpha_vantage", "synthetic"}
+        data_source in {"alpha_vantage", "csv_fallback", "synthetic"}
     """
-    # --- 1) Tenta yfinance: 2015-01-01 até hoje ---
-    try:
-        df = yf.download(
-            tickers=TICKERS,
-            start="2015-01-01",
-            progress=False,
-            auto_adjust=False,
-        )
-        if "Close" in df:
-            close = df["Close"].dropna()
-        else:
-            close = df.dropna()
-
-        if not close.empty:
-            return close, "yfinance"
-    except Exception as exc:  # pragma: no cover - proteção em produção
-        print(f"[WARN] Falha ao baixar dados com yfinance: {exc}")
-
-    # --- 2) Fallback: Alpha Vantage, se houver API key ---
+    # --- 1) Alpha Vantage, se houver API key ---
     # Aceita dois nomes de variável para conveniência:
     # - ALPHAVANTAGE_API_KEY (recomendado)
     # - ALPHA_KEY           (como configurado no Render)
@@ -145,7 +129,7 @@ def fetch_price_data() -> tuple[pd.DataFrame, str]:
         except Exception as exc:  # pragma: no cover - proteção em produção
             print(f"[WARN] Falha ao baixar dados com Alpha Vantage: {exc}")
 
-    # --- 3) Fallback local: CSV em data_fallback/sp500.csv ---
+    # --- 2) Fallback local: CSV em data_fallback/sp500.csv ---
     try:
         base_dir = Path(__file__).parent
         csv_path = base_dir / "data_fallback" / "sp500.csv"
@@ -160,7 +144,7 @@ def fetch_price_data() -> tuple[pd.DataFrame, str]:
     except Exception as exc:  # pragma: no cover
         print(f"[WARN] Falha ao carregar CSV de fallback: {exc}")
 
-    # --- 4) Último recurso: dados sintéticos (não recomendados em produção) ---
+    # --- 3) Último recurso: dados sintéticos (não recomendados em produção) ---
     num_days = 252  # ~1 ano útil
     dates = pd.date_range(end=pd.Timestamp.today(), periods=num_days, freq="B")
 
