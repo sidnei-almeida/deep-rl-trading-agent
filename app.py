@@ -3,6 +3,7 @@ from typing import List
 
 import numpy as np
 import onnxruntime as ort
+import yfinance as yf
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
@@ -29,6 +30,11 @@ class PredictionResponse(BaseModel):
 
     raw_action: List[float]
     allocations: List[float]
+
+
+TICKERS: List[str] = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA"]
+INITIAL_BALANCE: float = 100000.0
+TRANSACTION_COST: float = 0.001
 
 
 def load_onnx_session() -> ort.InferenceSession:
@@ -63,9 +69,9 @@ app = FastAPI(
     title="Deep RL Trading Agent API",
     description=(
         "API REST para servir o modelo PPO exportado em ONNX "
-        "a partir do Notebook 03 (Model Training and Evaluation)."
+        "e fornecer dados agregados para dashboards de trading."
     ),
-    version="1.0.0",
+    version="1.1.0",
 )
 
 onnx_session: ort.InferenceSession | None = None
@@ -144,6 +150,122 @@ def predict(request: PredictionRequest) -> PredictionResponse:
         raw_action=raw_action.tolist(),
         allocations=allocations.tolist(),
     )
+
+
+@app.get("/api/v1/dashboard-data")
+def get_dashboard_data() -> dict:
+    """
+    Endpoint para alimentar um dashboard de trading de RL.
+
+    - Baixa dados de fechamento de 1 ano para 5 tickers.
+    - Calcula benchmark Buy & Hold (B&H).
+    - Roda um backtest simples do agente PPO via modelo ONNX.
+    """
+    if onnx_session is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Modelo ONNX não carregado. Verifique logs do servidor.",
+        )
+
+    try:
+        data = yf.download(TICKERS, period="1y")["Close"].dropna()
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Erro ao baixar dados de mercado: {exc}",
+        ) from exc
+
+    if data.empty:
+        raise HTTPException(
+            status_code=500,
+            detail="Dados de mercado vazios retornados pelo yfinance.",
+        )
+
+    # --- Benchmark Buy & Hold ---
+    first_prices = data.iloc[0].values.astype(np.float64)
+    dollars_per_stock = INITIAL_BALANCE / len(TICKERS)
+    shares_per_stock = dollars_per_stock / first_prices
+
+    benchmark_history: List[float] = []
+    for i in range(len(data)):
+        current_prices = data.iloc[i].values.astype(np.float64)
+        portfolio_value = float(np.dot(shares_per_stock, current_prices))
+        benchmark_history.append(portfolio_value)
+
+    # --- Simulação do Agente (Backtest) ---
+    balance: float = INITIAL_BALANCE
+    shares_owned = np.zeros(len(TICKERS), dtype=np.float64)
+    portfolio_value: float = INITIAL_BALANCE
+    agent_history: List[float] = [INITIAL_BALANCE]
+
+    # input / output names do modelo
+    input_name = onnx_session.get_inputs()[0].name
+    output_name = onnx_session.get_outputs()[0].name
+
+    normalized_action_final = None
+
+    for i in range(len(data) - 1):
+        current_prices = data.iloc[i].values.astype(np.float64)
+
+        # Estado: [cash] + [shares_owned] + [current_prices]
+        obs = np.concatenate(
+            [np.array([balance], dtype=np.float32), shares_owned.astype(np.float32), current_prices.astype(np.float32)]
+        ).astype(np.float32)
+
+        obs_batch = obs.reshape(1, -1)
+
+        try:
+            outputs = onnx_session.run(
+                [output_name],
+                {input_name: obs_batch},
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Erro ao executar inferência ONNX durante backtest: {exc}",
+            ) from exc
+
+        action_logits = np.asarray(outputs[0], dtype=np.float64).reshape(-1)
+        action_exp = np.exp(action_logits - np.max(action_logits))
+        normalized_action = action_exp / np.sum(action_exp)
+
+        # Lógica de trade (replicando o step do ambiente)
+        target_dollar_value = portfolio_value * normalized_action
+        target_shares = target_dollar_value / current_prices
+        shares_to_trade = target_shares - shares_owned
+
+        trade_value = float(np.dot(shares_to_trade, current_prices))
+        fees = TRANSACTION_COST * abs(trade_value)
+
+        balance -= trade_value + fees
+        shares_owned = target_shares
+
+        # Valor no dia seguinte
+        next_day_prices = data.iloc[i + 1].values.astype(np.float64)
+        portfolio_value = float(balance + np.dot(shares_owned, next_day_prices))
+        agent_history.append(portfolio_value)
+
+        normalized_action_final = normalized_action
+
+    # Caso, por algum motivo, o loop não rode
+    if normalized_action_final is None:
+        normalized_action_final = np.full(len(TICKERS), 1.0 / len(TICKERS), dtype=np.float64)
+
+    current_allocation = {
+        ticker: float(weight) for ticker, weight in zip(TICKERS, normalized_action_final)
+    }
+
+    price_history = data.reset_index().to_dict("records")
+
+    return {
+        "tickers": TICKERS,
+        "initial_balance": INITIAL_BALANCE,
+        "transaction_cost": TRANSACTION_COST,
+        "current_allocation": current_allocation,
+        "agent_history": agent_history,
+        "benchmark_history": benchmark_history,
+        "price_history": price_history,
+    }
 
 
 if __name__ == "__main__":
