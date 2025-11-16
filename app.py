@@ -69,65 +69,72 @@ def softmax(x: np.ndarray) -> np.ndarray:
 
 def fetch_price_data() -> tuple[pd.DataFrame, str]:
     """
-    Baixa dados de preço via Alpha Vantage (TIME_SERIES_DAILY_ADJUSTED)
-    de 2015 até hoje.
+    Baixa dados de preço via yfinance de 2015 até hoje.
 
-    Se Alpha Vantage falhar / vier vazio, usa um CSV local em
+    Se yfinance falhar / vier vazio, usa um CSV local em
     data_fallback/sp500.csv. Se ainda assim falhar, gera uma série sintética
     como último recurso.
 
     Retorna:
         (dataframe_de_precos, data_source)
-        data_source in {"alpha_vantage", "csv_fallback", "synthetic"}
+        data_source in {"yfinance", "csv_fallback", "synthetic"}
     """
-    # --- 1) Alpha Vantage, se houver API key ---
-    # Aceita dois nomes de variável para conveniência:
-    # - ALPHAVANTAGE_API_KEY (recomendado)
-    # - ALPHA_KEY           (como configurado no Render)
-    api_key = os.getenv("ALPHAVANTAGE_API_KEY") or os.getenv("ALPHA_KEY")
-    if api_key:
-        try:
-            import requests
+    # --- 1) yfinance (fonte principal) ---
+    try:
+        import yfinance as yf
 
-            series_map: dict[str, pd.Series] = {}
-            for ticker in TICKERS:
-                url = "https://www.alphavantage.co/query"
-                params = {
-                    "function": "TIME_SERIES_DAILY_ADJUSTED",
-                    "symbol": ticker,
-                    "outputsize": "full",
-                    "apikey": api_key,
-                }
-                resp = requests.get(url, params=params, timeout=10)
-                resp.raise_for_status()
-                data_json = resp.json()
-                ts = data_json.get("Time Series (Daily)", {})
-                if not ts:
-                    print(f"[WARN] Alpha Vantage retornou vazio para {ticker}")
-                    continue
+        df = yf.download(
+            tickers=TICKERS,
+            start="2015-01-01",
+            progress=False,
+            auto_adjust=False,
+        )
 
-                dates = []
-                closes = []
-                for date_str, daily in ts.items():
-                    # usa o preço de fechamento ajustado ou normal
-                    close_str = daily.get("5. adjusted close") or daily.get("4. close")
-                    if close_str is None:
-                        continue
-                    dates.append(pd.to_datetime(date_str))
-                    closes.append(float(close_str))
+        # yfinance pode retornar MultiIndex ou DataFrame simples
+        # dependendo se baixa 1 ou vários tickers
+        if isinstance(df.columns, pd.MultiIndex):
+            # se for MultiIndex, pega só a coluna "Close"
+            if "Close" in df.columns.levels[0]:
+                close_df = df["Close"].copy()
+            else:
+                close_df = None
+        else:
+            # DataFrame simples (um ticker ou já processado)
+            if "Close" in df.columns:
+                close_df = df[["Close"]].copy()
+                close_df.columns = TICKERS[:1]  # ajusta nome se necessário
+            else:
+                close_df = df.copy()
 
-                if dates:
-                    s = pd.Series(closes, index=pd.DatetimeIndex(dates)).sort_index()
-                    # filtra de 2015 em diante
-                    s = s[s.index >= pd.Timestamp("2015-01-01")]
-                    series_map[ticker] = s
-
-            if series_map:
-                df_alpha = pd.DataFrame(series_map).dropna()
-                if not df_alpha.empty:
-                    return df_alpha, "alpha_vantage"
-        except Exception as exc:  # pragma: no cover - proteção em produção
-            print(f"[WARN] Falha ao baixar dados com Alpha Vantage: {exc}")
+        if close_df is not None:
+            close_df = close_df.dropna()
+            # garante que temos as colunas dos tickers
+            available_cols = [c for c in close_df.columns if c in TICKERS]
+            if available_cols and len(available_cols) == len(TICKERS):
+                final_df = close_df[available_cols].copy()
+                
+                # Atualiza o CSV local com os dados frescos do yfinance
+                try:
+                    base_dir = Path(__file__).parent
+                    csv_path = base_dir / "data_fallback" / "sp500.csv"
+                    # Cria o diretório se não existir
+                    csv_path.parent.mkdir(parents=True, exist_ok=True)
+                    # Prepara o DataFrame para salvar: reseta o índice e renomeia a coluna de data
+                    df_to_save = final_df.reset_index()
+                    # Garante que a coluna de data se chame "Date" (mesmo formato do CSV original)
+                    if df_to_save.columns[0] != "Date":
+                        df_to_save.rename(columns={df_to_save.columns[0]: "Date"}, inplace=True)
+                    # Salva o CSV
+                    df_to_save.to_csv(csv_path, index=False, date_format="%Y-%m-%d")
+                    print(f"[INFO] CSV atualizado com dados do yfinance: {csv_path}")
+                except Exception as save_exc:
+                    # Não falha se não conseguir salvar (ex: permissões no Render)
+                    # Isso é opcional, então só logamos um warning
+                    print(f"[WARN] Não foi possível atualizar CSV local: {save_exc}")
+                
+                return final_df, "yfinance"
+    except Exception as exc:  # pragma: no cover - proteção em produção
+        print(f"[WARN] Falha ao baixar dados com yfinance: {exc}")
 
     # --- 2) Fallback local: CSV em data_fallback/sp500.csv ---
     try:
