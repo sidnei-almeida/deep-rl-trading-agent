@@ -145,7 +145,22 @@ def fetch_price_data() -> tuple[pd.DataFrame, str]:
         except Exception as exc:  # pragma: no cover - proteção em produção
             print(f"[WARN] Falha ao baixar dados com Alpha Vantage: {exc}")
 
-    # --- 3) Último recurso: dados sintéticos ---
+    # --- 3) Fallback local: CSV em data_fallback/sp500.csv ---
+    try:
+        base_dir = Path(__file__).parent
+        csv_path = base_dir / "data_fallback" / "sp500.csv"
+        if csv_path.exists():
+            df_csv = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
+            # garante que só usamos as colunas dos tickers esperados
+            available_cols = [c for c in df_csv.columns if c in TICKERS]
+            if available_cols:
+                close_csv = df_csv[available_cols].dropna()
+                if not close_csv.empty:
+                    return close_csv, "csv_fallback"
+    except Exception as exc:  # pragma: no cover
+        print(f"[WARN] Falha ao carregar CSV de fallback: {exc}")
+
+    # --- 4) Último recurso: dados sintéticos (não recomendados em produção) ---
     num_days = 252  # ~1 ano útil
     dates = pd.date_range(end=pd.Timestamp.today(), periods=num_days, freq="B")
 
