@@ -5,6 +5,7 @@ import numpy as np
 import onnxruntime as ort
 import yfinance as yf
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 
@@ -75,6 +76,15 @@ app = FastAPI(
 )
 
 onnx_session: ort.InferenceSession | None = None
+
+# Configuração básica de CORS para permitir chamadas do frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # ajuste para a URL do seu dashboard em produção, se quiser restringir
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.on_event("startup")
