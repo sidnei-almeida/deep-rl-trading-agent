@@ -1,6 +1,8 @@
+import os
 from pathlib import Path
 from typing import List
 
+import pandas as pd
 import numpy as np
 import onnxruntime as ort
 import yfinance as yf
@@ -64,6 +66,101 @@ def softmax(x: np.ndarray) -> np.ndarray:
     x = x - np.max(x)
     exp_x = np.exp(x)
     return exp_x / np.sum(exp_x)
+
+
+def fetch_price_data() -> tuple[pd.DataFrame, str]:
+    """
+    Tenta baixar dados de preço via yfinance de 2015 até hoje.
+    Se falhar / vier vazio, tenta Alpha Vantage (TIME_SERIES_DAILY_ADJUSTED).
+    Se ainda assim falhar, gera uma série sintética como último recurso.
+
+    Retorna:
+        (dataframe_de_precos, data_source)
+        data_source in {"yfinance", "alpha_vantage", "synthetic"}
+    """
+    # --- 1) Tenta yfinance: 2015-01-01 até hoje ---
+    try:
+        df = yf.download(
+            tickers=TICKERS,
+            start="2015-01-01",
+            progress=False,
+            auto_adjust=False,
+        )
+        if "Close" in df:
+            close = df["Close"].dropna()
+        else:
+            close = df.dropna()
+
+        if not close.empty:
+            return close, "yfinance"
+    except Exception as exc:  # pragma: no cover - proteção em produção
+        print(f"[WARN] Falha ao baixar dados com yfinance: {exc}")
+
+    # --- 2) Fallback: Alpha Vantage, se houver API key ---
+    # Aceita dois nomes de variável para conveniência:
+    # - ALPHAVANTAGE_API_KEY (recomendado)
+    # - ALPHA_KEY           (como configurado no Render)
+    api_key = os.getenv("ALPHAVANTAGE_API_KEY") or os.getenv("ALPHA_KEY")
+    if api_key:
+        try:
+            import requests
+
+            series_map: dict[str, pd.Series] = {}
+            for ticker in TICKERS:
+                url = "https://www.alphavantage.co/query"
+                params = {
+                    "function": "TIME_SERIES_DAILY_ADJUSTED",
+                    "symbol": ticker,
+                    "outputsize": "full",
+                    "apikey": api_key,
+                }
+                resp = requests.get(url, params=params, timeout=10)
+                resp.raise_for_status()
+                data_json = resp.json()
+                ts = data_json.get("Time Series (Daily)", {})
+                if not ts:
+                    print(f"[WARN] Alpha Vantage retornou vazio para {ticker}")
+                    continue
+
+                dates = []
+                closes = []
+                for date_str, daily in ts.items():
+                    # usa o preço de fechamento ajustado ou normal
+                    close_str = daily.get("5. adjusted close") or daily.get("4. close")
+                    if close_str is None:
+                        continue
+                    dates.append(pd.to_datetime(date_str))
+                    closes.append(float(close_str))
+
+                if dates:
+                    s = pd.Series(closes, index=pd.DatetimeIndex(dates)).sort_index()
+                    # filtra de 2015 em diante
+                    s = s[s.index >= pd.Timestamp("2015-01-01")]
+                    series_map[ticker] = s
+
+            if series_map:
+                df_alpha = pd.DataFrame(series_map).dropna()
+                if not df_alpha.empty:
+                    return df_alpha, "alpha_vantage"
+        except Exception as exc:  # pragma: no cover - proteção em produção
+            print(f"[WARN] Falha ao baixar dados com Alpha Vantage: {exc}")
+
+    # --- 3) Último recurso: dados sintéticos ---
+    num_days = 252  # ~1 ano útil
+    dates = pd.date_range(end=pd.Timestamp.today(), periods=num_days, freq="B")
+
+    rng = np.random.default_rng(seed=42)
+    # preços iniciais aproximados
+    start_prices = np.array([180.0, 400.0, 140.0, 160.0, 800.0], dtype=np.float64)
+    # random walk multiplicativo
+    returns = rng.normal(loc=0.0002, scale=0.02, size=(num_days, len(TICKERS)))
+    prices = np.empty_like(returns)
+    prices[0] = start_prices
+    for i in range(1, num_days):
+        prices[i] = prices[i - 1] * (1.0 + returns[i])
+
+    close_synthetic = pd.DataFrame(prices, index=dates, columns=TICKERS)
+    return close_synthetic, "synthetic"
 
 
 app = FastAPI(
@@ -177,19 +274,8 @@ def get_dashboard_data() -> dict:
             detail="Modelo ONNX não carregado. Verifique logs do servidor.",
         )
 
-    try:
-        data = yf.download(TICKERS, period="1y")["Close"].dropna()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Erro ao baixar dados de mercado: {exc}",
-        ) from exc
-
-    if data.empty:
-        raise HTTPException(
-            status_code=500,
-            detail="Dados de mercado vazios retornados pelo yfinance.",
-        )
+    # Tenta baixar dados; se falhar, cai em série sintética
+    data, data_source = fetch_price_data()
 
     # --- Benchmark Buy & Hold ---
     first_prices = data.iloc[0].values.astype(np.float64)
@@ -269,6 +355,7 @@ def get_dashboard_data() -> dict:
 
     return {
         "tickers": TICKERS,
+        "data_source": data_source,
         "initial_balance": INITIAL_BALANCE,
         "transaction_cost": TRANSACTION_COST,
         "current_allocation": current_allocation,
