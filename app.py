@@ -112,27 +112,28 @@ def fetch_price_data() -> tuple[pd.DataFrame, str]:
             available_cols = [c for c in close_df.columns if c in TICKERS]
             if available_cols and len(available_cols) == len(TICKERS):
                 final_df = close_df[available_cols].copy()
-                
-                # Atualiza o CSV local com os dados frescos do yfinance
-                try:
-                    base_dir = Path(__file__).parent
-                    csv_path = base_dir / "data_fallback" / "sp500.csv"
-                    # Cria o diretório se não existir
-                    csv_path.parent.mkdir(parents=True, exist_ok=True)
-                    # Prepara o DataFrame para salvar: reseta o índice e renomeia a coluna de data
-                    df_to_save = final_df.reset_index()
-                    # Garante que a coluna de data se chame "Date" (mesmo formato do CSV original)
-                    if df_to_save.columns[0] != "Date":
-                        df_to_save.rename(columns={df_to_save.columns[0]: "Date"}, inplace=True)
-                    # Salva o CSV
-                    df_to_save.to_csv(csv_path, index=False, date_format="%Y-%m-%d")
-                    print(f"[INFO] CSV atualizado com dados do yfinance: {csv_path}")
-                except Exception as save_exc:
-                    # Não falha se não conseguir salvar (ex: permissões no Render)
-                    # Isso é opcional, então só logamos um warning
-                    print(f"[WARN] Não foi possível atualizar CSV local: {save_exc}")
-                
-                return final_df, "yfinance"
+                # Verifica se o DataFrame não está vazio após filtrar colunas
+                if not final_df.empty and len(final_df) > 0:
+                    # Atualiza o CSV local com os dados frescos do yfinance
+                    try:
+                        base_dir = Path(__file__).parent
+                        csv_path = base_dir / "data_fallback" / "sp500.csv"
+                        # Cria o diretório se não existir
+                        csv_path.parent.mkdir(parents=True, exist_ok=True)
+                        # Prepara o DataFrame para salvar: reseta o índice e renomeia a coluna de data
+                        df_to_save = final_df.reset_index()
+                        # Garante que a coluna de data se chame "Date" (mesmo formato do CSV original)
+                        if df_to_save.columns[0] != "Date":
+                            df_to_save.rename(columns={df_to_save.columns[0]: "Date"}, inplace=True)
+                        # Salva o CSV
+                        df_to_save.to_csv(csv_path, index=False, date_format="%Y-%m-%d")
+                        print(f"[INFO] CSV atualizado com dados do yfinance: {csv_path}")
+                    except Exception as save_exc:
+                        # Não falha se não conseguir salvar (ex: permissões no Render)
+                        # Isso é opcional, então só logamos um warning
+                        print(f"[WARN] Não foi possível atualizar CSV local: {save_exc}")
+                    
+                    return final_df, "yfinance"
     except Exception as exc:  # pragma: no cover - proteção em produção
         print(f"[WARN] Falha ao baixar dados com yfinance: {exc}")
 
@@ -141,13 +142,24 @@ def fetch_price_data() -> tuple[pd.DataFrame, str]:
         base_dir = Path(__file__).parent
         csv_path = base_dir / "data_fallback" / "sp500.csv"
         if csv_path.exists():
+            print(f"[INFO] Tentando carregar CSV de fallback: {csv_path}")
             df_csv = pd.read_csv(csv_path, index_col="Date", parse_dates=True)
+            print(f"[INFO] CSV carregado. Colunas disponíveis: {df_csv.columns.tolist()}, Linhas: {len(df_csv)}")
             # garante que só usamos as colunas dos tickers esperados
             available_cols = [c for c in df_csv.columns if c in TICKERS]
+            print(f"[INFO] Colunas dos tickers esperados disponíveis: {available_cols}")
             if available_cols:
                 close_csv = df_csv[available_cols].dropna()
-                if not close_csv.empty:
+                print(f"[INFO] CSV após dropna. Linhas: {len(close_csv)}")
+                if not close_csv.empty and len(close_csv) > 0:
+                    print(f"[INFO] Retornando CSV de fallback com {len(close_csv)} linhas")
                     return close_csv, "csv_fallback"
+                else:
+                    print(f"[WARN] CSV de fallback está vazio após dropna()")
+            else:
+                print(f"[WARN] CSV não contém colunas dos tickers esperados: {TICKERS}")
+        else:
+            print(f"[WARN] CSV de fallback não encontrado em: {csv_path}")
     except Exception as exc:  # pragma: no cover
         print(f"[WARN] Falha ao carregar CSV de fallback: {exc}")
 
@@ -282,6 +294,16 @@ def get_dashboard_data() -> dict:
 
     # Tenta baixar dados; se falhar, cai em série sintética
     data, data_source = fetch_price_data()
+
+    # Validação: verifica se o DataFrame está vazio
+    if data.empty or len(data) == 0:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Dados de mercado vazios retornados pela fonte '{data_source}'. "
+                "Verifique logs do servidor para mais detalhes."
+            ),
+        )
 
     # --- Benchmark Buy & Hold ---
     first_prices = data.iloc[0].values.astype(np.float64)
