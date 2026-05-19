@@ -1,13 +1,6 @@
 <!-- Canonical repository: https://github.com/sidnei-almeida/deep-rl-trading-agent -->
-<!-- Optional hero image: add images/header.png later and insert a centered <img> above the title if desired. -->
 <p align="center">
-  <a href="https://fastapi.tiangolo.com/" title="FastAPI"><img src="https://cdn.simpleicons.org/fastapi/009688" alt="FastAPI" width="56" height="56" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://www.python.org/" title="Python"><img src="https://cdn.simpleicons.org/python/3776AB" alt="Python" width="56" height="56" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://onnx.ai/" title="ONNX"><img src="https://cdn.simpleicons.org/onnx/005CED" alt="ONNX" width="56" height="56" /></a>
-  &nbsp;&nbsp;&nbsp;
-  <a href="https://numpy.org/" title="NumPy"><img src="https://cdn.simpleicons.org/numpy/013243" alt="NumPy" width="56" height="56" /></a>
+  <img src="images/header.png" alt="Deep RL trading agent — header" width="640" />
 </p>
 
 <h1 align="center">deep-rl-trading-agent</h1>
@@ -67,22 +60,21 @@ flowchart LR
 
 ## Gallery
 
-Screenshots live in **`images/`**. There is **no** separate header asset yet—the icon row above replaces it until you add optional `images/header.png`.
-
 <p align="center">
-  <img src="images/software1.png" alt="Deep RL trading agent — software screenshot 1" width="880" />
+  <table>
+    <tr>
+      <td align="center" valign="top">
+        <img src="images/software1.png" alt="Deep RL trading agent — screenshot 1" width="450" />
+      </td>
+      <td align="center" valign="top">
+        <img src="images/software2.png" alt="Deep RL trading agent — screenshot 2" width="450" />
+      </td>
+    </tr>
+  </table>
 </p>
 
 <p align="center">
-  <em><strong>Figure 1.</strong> Dashboard or API usage (replace <code>software1.png</code> when you refresh visuals).</em>
-</p>
-
-<p align="center">
-  <img src="images/software2.png" alt="Deep RL trading agent — software screenshot 2" width="880" />
-</p>
-
-<p align="center">
-  <em><strong>Figure 2.</strong> Secondary view — metrics, backtest, or OpenAPI (your choice of capture).</em>
+  <em><strong>Figure 1.</strong> Left: primary UI or dashboard. Right: secondary view (metrics, backtest, or docs)—update <code>images/software1.png</code> / <code>software2.png</code> as needed.</em>
 </p>
 
 ---
@@ -176,8 +168,9 @@ deep-rl-trading-agent/
 ├── data_fallback/
 │   └── sp500.csv
 ├── images/
+│   ├── header.png
 │   ├── software1.png
-│   └── software2.png          # optional: header.png later
+│   └── software2.png
 └── notebooks/
     ├── 01_Data_Acquisition_and_Analysis.ipynb
     └── 03_Model_Training_and_Evaluation.ipynb
