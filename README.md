@@ -1,301 +1,205 @@
-## Deep RL Trading Agent API
+<!-- Canonical repository: https://github.com/sidnei-almeida/deep-rl-trading-agent -->
+<!-- Optional hero image: add images/header.png later and insert a centered <img> above the title if desired. -->
+<p align="center">
+  <a href="https://fastapi.tiangolo.com/" title="FastAPI"><img src="https://cdn.simpleicons.org/fastapi/009688" alt="FastAPI" width="56" height="56" /></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://www.python.org/" title="Python"><img src="https://cdn.simpleicons.org/python/3776AB" alt="Python" width="56" height="56" /></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://onnx.ai/" title="ONNX"><img src="https://cdn.simpleicons.org/onnx/005CED" alt="ONNX" width="56" height="56" /></a>
+  &nbsp;&nbsp;&nbsp;
+  <a href="https://numpy.org/" title="NumPy"><img src="https://cdn.simpleicons.org/numpy/013243" alt="NumPy" width="56" height="56" /></a>
+</p>
 
-Production-ready REST API for serving a **PPO-based reinforcement learning trading policy** exported to **ONNX**.  
-The service is implemented with **FastAPI**, runs purely on **CPU**, and is fully prepared for deployment on **Render**.
+<h1 align="center">deep-rl-trading-agent</h1>
 
----
+<p align="center">
+  <strong>FastAPI service serving a PPO reinforcement-learning trading policy as ONNX on CPU, plus a dashboard backtest endpoint with Buy&nbsp;&amp;&nbsp;Hold benchmark and live-quality price data (yfinance with fallbacks).</strong>
+</p>
 
-## 1. Overview
+<p align="center">
+  <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI" />
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11" />
+  <img src="https://img.shields.io/badge/ONNX%20Runtime-1.23-005CED?style=flat-square&logo=onnx&logoColor=white" alt="ONNX Runtime" />
+  <img src="https://img.shields.io/badge/Deploy-Render-3A56D4?style=flat-square&logo=render&logoColor=white" alt="Render" />
+</p>
 
-This project exposes a trained **Proximal Policy Optimization (PPO)** policy as a web service.  
-The model was trained in a custom `TradingEnv` (Gymnasium-style environment) using `stable-baselines3` and exported to ONNX in the training notebook (`03_Model_Training_and_Evaluation.ipynb`).
-
-The API:
-- **Loads** the ONNX policy at startup using `onnxruntime` (CPU only).
-- **Accepts** a single observation vector representing the current trading state.
-- **Returns** both:
-  - the **raw policy output** (logits / unnormalized actions), and
-  - a **softmax-normalized allocation vector** that can be interpreted as target portfolio weights.
-
-This makes it suitable as a backend for:
-- Live or paper trading systems,
-- Strategy simulators,
-- Research dashboards and monitoring tools.
-
----
-
-## 2. Architecture
-
-- **Language**: Python 3.11 (Render is configured with `PYTHON_VERSION=3.11.8`).
-- **Framework**: FastAPI.
-- **Model Runtime**: ONNX Runtime (CPU execution provider).
-- **Web Server**: Uvicorn.
-- **Model File**: `ppo_trader_onnx/ppo_policy_100k.onnx`.
-
-High-level flow:
-
-1. API starts and triggers the FastAPI `startup` event.
-2. The ONNX model is loaded once into memory via `onnxruntime.InferenceSession`.
-3. Each `/predict` call:
-   - Validates and reshapes the input observation.
-   - Performs ONNX inference.
-   - Applies softmax to the raw action to compute portfolio allocations.
+<p align="center">
+  <a href="#overview">Overview</a> ·
+  <a href="#gallery">Gallery</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#observation--action-space">Observation / action</a> ·
+  <a href="#api-reference">API</a> ·
+  <a href="#installation-and-quick-start">Quick start</a> ·
+  <a href="#deployment">Deploy</a> ·
+  <a href="#project-layout">Layout</a> ·
+  <a href="#disclaimer">Disclaimer</a> ·
+  <a href="#author">Author</a>
+</p>
 
 ---
 
-## 3. Observation & Action Space
+## Overview
 
-The ONNX model represents the policy head of a PPO agent trained on a custom `TradingEnv`.  
-The **observation vector** has shape **(11,)**:
+**deep-rl-trading-agent** packages a **Proximal Policy Optimization (PPO)** policy trained in a custom trading environment (see `notebooks/03_Model_Training_and_Evaluation.ipynb`), exported to **`ppo_trader_onnx/ppo_policy_100k.onnx`**, and served with **ONNX Runtime** (CPU). The API returns **raw logits** and **softmax portfolio weights** over **five** liquid names: **AAPL, MSFT, GOOGL, AMZN, NVDA**.
 
-- **Index 0**: cash balance (`cash`).
-- **Indices 1–5**: number of shares owned for each of the 5 assets (`shares_owned`).
-- **Indices 6–10**: current prices for each of the 5 assets (`prices`).
+| Piece | Role |
+|-------|------|
+| **`/predict`** | Single-step inference from an 11-dimensional observation. |
+| **`/api/v1/dashboard-data`** | Historical prices (yfinance → CSV → synthetic), **Buy & Hold** curve, and **agent backtest** time series for charts. |
+| **Training artifacts** | Notebooks under `notebooks/`; weights committed as ONNX in `ppo_trader_onnx/`. |
 
-In the original environment:
+```mermaid
+flowchart LR
+  subgraph api["FastAPI"]
+    P["/predict"]
+    D["/api/v1/dashboard-data"]
+  end
 
-- The action space is a continuous vector of shape `(5,)` representing per-asset logits.
-- These logits are passed through **softmax** to obtain portfolio weights.
+  ONNX["ONNX policy\nppo_policy_100k.onnx"]
+  MKT["Market data\nyfinance / CSV / synthetic"]
 
-The ONNX policy follows this structure; the API applies softmax after inference so you receive:
-
-- **`raw_action`**: model output logits.
-- **`allocations`**: normalized weights (softmax) that sum to ~1.0.
-
----
-
-## 4. Project Structure
-
-- **`app.py`**  
-  Main FastAPI application. Handles:
-  - ONNX model loading (`onnxruntime.InferenceSession`),
-  - Request/response validation (Pydantic models),
-  - `/` and `/predict` endpoints.
-
-- **`ppo_trader_onnx/ppo_policy_100k.onnx`**  
-  ONNX-exported PPO policy (≈40 KB), exported from the 100k-timestep model in the training notebook.
-
-- **`requirements.txt`**  
-  Python dependencies for CPU-only inference and API server.
-
-- **`render.yaml`**  
-  Infrastructure-as-code file for deploying this service on **Render** as a Python web service.
-
-- **`notebooks/`**  
-  Jupyter notebooks for data processing and model training/evaluation (not required at runtime).
-
----
-
-## 5. API Endpoints
-
-### 5.1 Health Check
-
-- **Method**: `GET`
-- **Path**: `/`
-- **Description**: Basic health and model status check.
-
-**Response Example**
-
-```json
-{
-  "status": "ok",
-  "message": "Deep RL Trading Agent API (PPO ONNX) rodando.",
-  "model_loaded": true
-}
+  P --> ONNX
+  D --> ONNX
+  D --> MKT
 ```
 
-> `model_loaded = true` indicates the ONNX model was successfully loaded at startup.
+---
+
+## Gallery
+
+Screenshots live in **`images/`**. There is **no** separate header asset yet—the icon row above replaces it until you add optional `images/header.png`.
+
+<p align="center">
+  <img src="images/software1.png" alt="Deep RL trading agent — software screenshot 1" width="880" />
+</p>
+
+<p align="center">
+  <em><strong>Figure 1.</strong> Dashboard or API usage (replace <code>software1.png</code> when you refresh visuals).</em>
+</p>
+
+<p align="center">
+  <img src="images/software2.png" alt="Deep RL trading agent — software screenshot 2" width="880" />
+</p>
+
+<p align="center">
+  <em><strong>Figure 2.</strong> Secondary view — metrics, backtest, or OpenAPI (your choice of capture).</em>
+</p>
 
 ---
 
-### 5.2 Prediction
+## Features
 
-- **Method**: `POST`
-- **Path**: `/predict`
-- **Description**: Generates an action from a single observation of the trading environment.
-
-#### Request Body
-
-```json
-{
-  "observation": [100000.0, 0.0, 0.0, 0.0, 0.0, 0.0, 500.0, 3000.0, 150.0, 350.0, 700.0]
-}
-```
-
-**Constraints:**
-
-- `observation` must be:
-  - a list of **11 numeric values (floats)**,
-  - representing `[cash, 5x shares_owned, 5x prices]` in that exact order.
-
-If the shape is not `(11,)`, the API returns HTTP **400 Bad Request** with an explicit error message.
-
-#### Response Body
-
-```json
-{
-  "raw_action": [
-    -0.12345671653747559,
-    0.541234016418457,
-    0.012345678903341293,
-    -0.7890123128890991,
-    0.35999998450279236
-  ],
-  "allocations": [
-    0.140123456716,
-    0.322345678903,
-    0.184567890123,
-    0.065432109877,
-    0.287530864381
-  ]
-}
-```
-
-- **`raw_action`**  
-  Raw logits output by the policy head.
-
-- **`allocations`**  
-  Softmax-normalized weights derived from `raw_action`.  
-  Interpretable as target portfolio weights for the 5 assets (usually sum to 1.0 up to numerical precision).
+| Area | Description |
+|------|-------------|
+| **CPU inference** | `onnxruntime` with `CPUExecutionProvider` only—no GPU required for serving. |
+| **Strict validation** | `POST /predict` rejects observations unless `len(observation) == 11`. |
+| **Data resilience** | `fetch_price_data()` tries **yfinance**, then **`data_fallback/sp500.csv`**, then a **deterministic synthetic** series. |
+| **CORS** | Open by default (`*`); tighten `allow_origins` for production. |
+| **Render-ready** | `render.yaml` with Uvicorn bound to `$PORT`. |
 
 ---
 
-## 6. Local Development & Testing
+## Observation & action space
 
-### 6.1 Prerequisites
+**Observation** (length **11**):
 
-- **Python**: 3.11.x (recommended: 3.11.8 to match Render config).
-- **Pip**: latest version.
+| Indices | Meaning |
+|---------|---------|
+| `0` | Cash balance |
+| `1–5` | Shares owned (one per ticker) |
+| `6–10` | Current prices for the five assets |
 
-### 6.2 Installation
+**Response** from `/predict`:
 
-From the project root:
+- **`raw_action`** — policy logits (length 5).
+- **`allocations`** — **softmax(raw_action)**; interpret as portfolio weights (sum ≈ 1).
+
+---
+
+## API reference
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/` | Health JSON: `status`, `model_loaded`. |
+| `POST` | `/predict` | Body: `{ "observation": [ ... 11 floats ... ] }` → `raw_action`, `allocations`. |
+| `GET` | `/api/v1/dashboard-data` | JSON bundle: `tickers`, `data_source`, `agent_history`, `benchmark_history`, `price_history`, `current_allocation`, etc. |
+
+Interactive docs: **`/docs`**, **`/redoc`**.
+
+**Example**
 
 ```bash
+curl -s -X POST "http://localhost:8000/predict" \
+  -H "Content-Type: application/json" \
+  -d '{"observation": [100000,0,0,0,0,0,500,3000,150,350,700]}' | jq .
+```
+
+---
+
+## Installation and quick start
+
+```bash
+git clone https://github.com/sidnei-almeida/deep-rl-trading-agent.git
+cd deep-rl-trading-agent
+python -m venv .venv
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-### 6.3 Running the API Locally
-
-```bash
 uvicorn app:app --reload --host 0.0.0.0 --port 8000
 ```
 
-The API will be available at:
+Open **`http://localhost:8000/docs`**.
 
-- `http://localhost:8000`
-- `http://localhost:8000/docs` – interactive Swagger UI
-- `http://localhost:8000/redoc` – alternative API docs
+---
 
-### 6.4 Example `curl` Call
+## Deployment
 
-```bash
-curl -X POST "http://localhost:8000/predict" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "observation": [100000, 0, 0, 0, 0, 0, 500, 3000, 150, 350, 700]
-  }'
+`render.yaml` defines a **Python Web Service**:
+
+- **Build:** `pip install -r requirements.txt`
+- **Start:** `uvicorn app:app --host 0.0.0.0 --port $PORT`
+- **Python:** `3.11.8` via `PYTHON_VERSION`
+
+Ensure **`ppo_trader_onnx/ppo_policy_100k.onnx`** is in the repo for the service to report `model_loaded: true`.
+
+---
+
+## Project layout
+
+```
+deep-rl-trading-agent/
+├── app.py
+├── requirements.txt
+├── runtime.txt
+├── render.yaml
+├── ppo_trader_onnx/
+│   └── ppo_policy_100k.onnx
+├── data_fallback/
+│   └── sp500.csv
+├── images/
+│   ├── software1.png
+│   └── software2.png          # optional: header.png later
+└── notebooks/
+    ├── 01_Data_Acquisition_and_Analysis.ipynb
+    └── 03_Model_Training_and_Evaluation.ipynb
 ```
 
 ---
 
-## 7. Deployment on Render
+## Disclaimer
 
-This repository includes a **Render** configuration file: `render.yaml`.
-
-### 7.1 Service Definition (`render.yaml`)
-
-- **Service Type**: `web`
-- **Environment**: `python`
-- **Plan**: `free` (can be adjusted to `starter`, `standard`, etc.).
-- **Python Version**: `PYTHON_VERSION=3.11.8`
-- **Build Command**:
-
-  ```yaml
-  buildCommand: "pip install -r requirements.txt"
-  ```
-
-- **Start Command**:
-
-  ```yaml
-  startCommand: "uvicorn app:app --host 0.0.0.0 --port $PORT"
-  ```
-
-### 7.2 Steps to Deploy
-
-1. **Push the project to GitHub** (or another supported Git provider).
-2. In the **Render Dashboard**:
-   - Click **"New" → "Web Service"**.
-   - Connect to the repository containing this project.
-   - Render will automatically detect `render.yaml` and use it to configure the service.
-3. Confirm settings and deploy.
-4. After deployment, you can:
-   - Check health via `GET /`.
-   - Test predictions via `POST /predict` using the base URL generated by Render.
+This software is for **research and education**. Markets are risky; the PPO policy is a snapshot trained on historical patterns. **Not financial advice.** Add authentication, rate limits, and monitoring before any real-money use.
 
 ---
 
-## 8. Environment & Dependencies
+## Author
 
-### 8.1 Python Version
-
-- The service is configured for **Python 3.11.8** on Render.
-- Local environments should use Python **3.11.x** to avoid version mismatch, especially for `onnxruntime`.
-
-### 8.2 Key Dependencies
-
-- **FastAPI** – high-performance web framework for building APIs.
-- **Uvicorn** – ASGI server used to serve the FastAPI application.
-- **ONNX Runtime** – model inference engine, CPU-only.
-- **NumPy** – numerical operations (input reshaping, softmax).
-- **Pydantic** – request and response schema validation.
-
-All dependencies are pinned in `requirements.txt` for reproducible environments.
+| | |
+| --- | --- |
+| **Maintainer** | [Sidnei Almeida](https://github.com/sidnei-almeida) |
+| **Repository** | [github.com/sidnei-almeida/deep-rl-trading-agent](https://github.com/sidnei-almeida/deep-rl-trading-agent) |
 
 ---
 
-## 9. Security & Production Considerations
-
-- **Input Validation**  
-  The `/predict` endpoint validates the shape of the observation and returns HTTP 400 for invalid inputs.
-
-- **Model Loading**  
-  The ONNX model is loaded once during startup for efficiency. If loading fails, requests will receive an HTTP 500 error and logs should be inspected.
-
-- **Authentication / Authorization**  
-  The current implementation is **open by design** for simplicity.  
-  For real-world production use, consider adding:
-  - API keys, OAuth2, or JWT auth,
-  - IP allowlists or private network deployment,
-  - Rate limiting and logging.
-
-- **Monitoring & Logging**  
-  When deploying to Render or other platforms, make sure to:
-  - Monitor response times,
-  - Log failed inferences and input payloads (without leaking sensitive data),
-  - Track model version and config for reproducibility.
-
----
-
-## 10. Limitations & Next Steps
-
-- **Model Behavior**  
-  The current ONNX model is a snapshot of a PPO policy trained on historical data. Its live performance will depend on:
-  - Market regime shifts,
-  - Transaction costs and slippage,
-  - Data feed quality and latency.
-
-- **State Construction**  
-  This API expects a **fully constructed observation vector**. In a production trading system, you may want to:
-  - Build a dedicated state-construction layer (e.g., from positions and price feeds),
-  - Validate that the observation strictly matches the training environment semantics.
-
-- **Extensibility**  
-  Possible extensions:
-  - Add batch prediction endpoints.
-  - Expose additional diagnostics (e.g., value function estimates).
-  - Integrate risk controls (e.g., capping allocations or notional exposure).
-
-If you plan to extend this API (e.g., different models, markets, or environments), the current structure provides a clean, modular starting point for a more comprehensive RL trading microservice.
-
-
+<p align="center">
+  <sub>Training used <b>stable-baselines3</b>-style workflows in notebooks; runtime depends only on ONNX + FastAPI.</sub>
+</p>
