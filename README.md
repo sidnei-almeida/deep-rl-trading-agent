@@ -61,20 +61,11 @@ flowchart LR
 ## Gallery
 
 <p align="center">
-  <table>
-    <tr>
-      <td align="center" valign="top">
-        <img src="images/software1.png" alt="Deep RL trading agent — screenshot 1" width="450" />
-      </td>
-      <td align="center" valign="top">
-        <img src="images/software2.png" alt="Deep RL trading agent — screenshot 2" width="450" />
-      </td>
-    </tr>
-  </table>
+  <img src="images/software.png" alt="Deep RL trading agent — dashboard / API screenshot" width="920" />
 </p>
 
 <p align="center">
-  <em><strong>Figure 1.</strong> Left: primary UI or dashboard. Right: secondary view (metrics, backtest, or docs)—update <code>images/software1.png</code> / <code>software2.png</code> as needed.</em>
+  <em><strong>Figure 1.</strong> Interface or OpenAPI/docs view of the service (replace <code>images/software.png</code> if you update the screenshot).</em>
 </p>
 
 ---
@@ -169,8 +160,7 @@ deep-rl-trading-agent/
 │   └── sp500.csv
 ├── images/
 │   ├── header.png
-│   ├── software1.png
-│   └── software2.png
+│   └── software.png
 └── notebooks/
     ├── 01_Data_Acquisition_and_Analysis.ipynb
     └── 03_Model_Training_and_Evaluation.ipynb
